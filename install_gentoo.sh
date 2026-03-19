@@ -325,7 +325,7 @@ die()     { echo -e "\e[0;31m[ERROR]\e[0m $*" >&2; exit 1; }
 set +u
 source /etc/profile
 set -u
-export PS1="(chroot) ${PS1}"
+export PS1="(chroot) ${PS1:-}"
 
 # ---------------------------------------------------------------------------
 # Synchronizacja Portage
@@ -414,7 +414,7 @@ die()     { echo -e "\e[0;31m[ERROR]\e[0m \$*" >&2; exit 1; }
 set +u
 source /etc/profile
 set -u
-export PS1="(chroot) \${PS1}"
+export PS1="(chroot) \${PS1:-}"
 
 BOOT_MODE="${BOOT_MODE}"
 DISK="${DISK}"
