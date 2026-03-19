@@ -193,7 +193,9 @@ fi
 # ---------------------------------------------------------------------------
 info "Pobieranie aktualnego stage3 (${STAGE3_VARIANT})…"
 LATEST_FILE_URL="${GENTOO_MIRROR}/releases/${ARCH}/autobuilds/latest-${STAGE3_VARIANT}.txt"
-LATEST_PATH=$(wget -qO- "${LATEST_FILE_URL}" | grep -v '^#' | awk '{print $1}' | head -1)
+# Plik latest-*.txt jest podpisany PGP – odfiltruj nagłówki PGP, komentarze i puste linie,
+# a następnie wyciągnij pierwszą kolumnę z linii zawierającej ścieżkę do tarballa.
+LATEST_PATH=$(wget -qO- "${LATEST_FILE_URL}" | grep '\.tar\.' | grep -v '^#' | awk '{print $1}' | head -1)
 [[ -n "$LATEST_PATH" ]] || die "Nie udało się odczytać ścieżki stage3."
 
 STAGE3_URL="${GENTOO_MIRROR}/releases/${ARCH}/autobuilds/${LATEST_PATH}"
