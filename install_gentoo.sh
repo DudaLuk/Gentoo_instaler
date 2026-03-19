@@ -373,6 +373,9 @@ set -u
 # ---------------------------------------------------------------------------
 # Aktualizacja systemu (world)
 # ---------------------------------------------------------------------------
+# Przerwanie zależności cyklicznej libwebp <-> tiff (webp USE flag)
+mkdir -p /etc/portage/package.use
+echo "media-libs/tiff -webp" >> /etc/portage/package.use/fix-circular
 info "Aktualizacja systemu bazowego…"
 emerge -uDN --with-bdeps=y --quiet-build @world
 
