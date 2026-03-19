@@ -42,6 +42,10 @@ Po zakończeniu instalacji system zawiera:
    # lub dla QEMU/KVM:
    sudo bash install_gentoo.sh /dev/vda
    ```
+   Aby **wznowić instalację po błędzie** (pomijając partycjonowanie i rozpakowywanie stage3):
+   ```bash
+   sudo bash install_gentoo.sh --skip-disk /dev/sda
+   ```
 5. Po zakończeniu instalacji (zwykle 2–4 godziny zależnie od sprzętu) uruchom ponownie:
    ```bash
    reboot

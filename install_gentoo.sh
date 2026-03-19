@@ -6,10 +6,12 @@
 # Tworzy użytkownika: lukasz  (hasło: 666)
 # =============================================================================
 # Użycie:
-#   sudo bash install_gentoo.sh [DYSK]
+#   sudo bash install_gentoo.sh [--skip-disk] [DYSK]
 #   Np.: sudo bash install_gentoo.sh /dev/sda
 #        sudo bash install_gentoo.sh /dev/vda
+#        sudo bash install_gentoo.sh --skip-disk /dev/sda   # wznawianie po błędzie
 #   Jeśli DYSK nie zostanie podany, skrypt spróbuje go wykryć automatycznie.
+#   --skip-disk  Pomija partycjonowanie, formatowanie i rozpakowywanie stage3.
 # =============================================================================
 
 set -euo pipefail
@@ -39,6 +41,7 @@ USER_PASSWORD="666"
 ROOT_PASSWORD="toor"
 SWAP_SIZE="2G"       # rozmiar partycji swap (tylko wartości MiB lub GiB, np. 2G lub 2048M)
 BOOT_SIZE="512M"     # rozmiar partycji /boot lub EFI (tylko MiB, np. 512M)
+STAGE3_FILE=""       # wypełniane automatycznie podczas pobierania stage3
 
 # ---------------------------------------------------------------------------
 # Funkcja pomocnicza: konwersja rozmiaru na MiB
@@ -60,11 +63,24 @@ MAKEOPTS="-j${NCPU}"
 [[ $EUID -eq 0 ]] || die "Uruchom skrypt jako root (sudo)."
 
 # ---------------------------------------------------------------------------
-# Wykrywanie / wybór dysku
+# Wykrywanie / wybór dysku i opcje
 # ---------------------------------------------------------------------------
-if [[ -n "${1:-}" ]]; then
-    DISK="$1"
-else
+# Użycie: sudo bash install_gentoo.sh [--skip-disk] [DYSK]
+#   --skip-disk  Pomija partycjonowanie i rozpakowywanie stage3.
+#                Używaj do wznawiania instalacji po błędzie w fazie chroot.
+SKIP_DISK=false
+DISK=""
+
+while [[ $# -gt 0 ]]; do
+    case "${1}" in
+        --skip-disk) SKIP_DISK=true ;;
+        --*) die "Nieznana opcja: $1  Użycie: $0 [--skip-disk] [DYSK]" ;;
+        *) DISK="$1" ;;
+    esac
+    shift
+done
+
+if [[ -z "$DISK" ]]; then
     # Automatyczne wykrycie – wybierz pierwszy dysk blokowy (nie pętla/cd)
     DISK=$(lsblk -dpno NAME,TYPE | awk '$2=="disk"{print $1}' | grep -v loop | head -1)
     [[ -n "$DISK" ]] || die "Nie znaleziono dysku. Podaj dysk jako argument: $0 /dev/sda"
@@ -85,8 +101,9 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Ostrzeżenie – kasujemy dane!
+# Ostrzeżenie – kasujemy dane! (pomijane w trybie --skip-disk)
 # ---------------------------------------------------------------------------
+if [[ "$SKIP_DISK" == "false" ]]; then
 echo ""
 echo -e "${BOLD}${RED}!!! UWAGA !!!"
 echo "Skrypt skasuje WSZYSTKIE dane na dysku: ${DISK}"
@@ -94,6 +111,7 @@ echo "Tryb rozruchu : ${BOOT_MODE}"
 echo "Punkt montowania : ${MOUNTPOINT}"
 echo -e "Naciśnij ENTER aby kontynuować lub Ctrl+C aby przerwać.${RESET}"
 read -r
+fi
 
 # ---------------------------------------------------------------------------
 # Instalacja narzędzi potrzebnych w Ubuntu Live
@@ -105,123 +123,145 @@ apt-get install -y -qq \
     gnupg2 xz-utils lzma bzip2 > /dev/null
 
 # ---------------------------------------------------------------------------
-# Partycjonowanie
+# Ustalenie nazw partycji (wspólne dla obu trybów)
 # ---------------------------------------------------------------------------
-info "Partycjonowanie dysku ${DISK}…"
-
-# Oblicz granice partycji w MiB
-BOOT_MIB=$(parse_mib "$BOOT_SIZE")
-SWAP_MIB=$(parse_mib "$SWAP_SIZE")
-
-# Odmontuj ewentualne montowania
-swapoff -a 2>/dev/null || true
-umount -R "${MOUNTPOINT}" 2>/dev/null || true
-
-# Usuń stary GPT/MBR
-sgdisk --zap-all "${DISK}" 2>/dev/null || parted -s "${DISK}" mklabel gpt
-
 if [[ "$BOOT_MODE" == "uefi" ]]; then
-    # EFI: 1MiB .. BOOT_MIB
-    # swap: BOOT_MIB .. (BOOT_MIB + SWAP_MIB)
-    # root: (BOOT_MIB + SWAP_MIB) .. 100%
-    SWAP_END=$(( BOOT_MIB + SWAP_MIB ))
-    parted -s "${DISK}" \
-        mklabel gpt \
-        mkpart "EFI"  fat32      1MiB          "${BOOT_MIB}MiB" \
-        set 1 esp on \
-        mkpart "swap" linux-swap "${BOOT_MIB}MiB"  "${SWAP_END}MiB" \
-        mkpart "root" ext4       "${SWAP_END}MiB"  100%
     EFI_PART="${DISK}1"
     SWAP_PART="${DISK}2"
     ROOT_PART="${DISK}3"
+    BOOT_PART=""
 else
-    # BIOS: mała partycja BIOS boot (1-3 MiB) + boot + swap + root
-    # boot: 3MiB .. (3 + BOOT_MIB)
-    # swap: (3 + BOOT_MIB) .. (3 + BOOT_MIB + SWAP_MIB)
-    # root: (3 + BOOT_MIB + SWAP_MIB) .. 100%
-    BIOS_END=3
-    BOOT_END=$(( BIOS_END + BOOT_MIB ))
-    SWAP_END=$(( BOOT_END + SWAP_MIB ))
-    parted -s "${DISK}" \
-        mklabel gpt \
-        mkpart "BIOS" 1MiB "${BIOS_END}MiB" \
-        set 1 bios_grub on \
-        mkpart "boot" ext4       "${BIOS_END}MiB"  "${BOOT_END}MiB" \
-        mkpart "swap" linux-swap "${BOOT_END}MiB"  "${SWAP_END}MiB" \
-        mkpart "root" ext4       "${SWAP_END}MiB"  100%
+    EFI_PART=""
     BOOT_PART="${DISK}2"
     SWAP_PART="${DISK}3"
     ROOT_PART="${DISK}4"
 fi
 
-# Odśwież tablicę partycji
-partprobe "${DISK}" 2>/dev/null || true
-sleep 2
+if [[ "$SKIP_DISK" == "false" ]]; then
+    # ---------------------------------------------------------------------------
+    # Partycjonowanie
+    # ---------------------------------------------------------------------------
+    info "Partycjonowanie dysku ${DISK}…"
 
-# ---------------------------------------------------------------------------
-# Formatowanie
-# ---------------------------------------------------------------------------
-info "Formatowanie partycji…"
+    # Oblicz granice partycji w MiB
+    BOOT_MIB=$(parse_mib "$BOOT_SIZE")
+    SWAP_MIB=$(parse_mib "$SWAP_SIZE")
 
-if [[ "$BOOT_MODE" == "uefi" ]]; then
-    mkfs.fat -F32 -n EFI "${EFI_PART}"
+    # Odmontuj ewentualne montowania
+    swapoff -a 2>/dev/null || true
+    umount -R "${MOUNTPOINT}" 2>/dev/null || true
+
+    # Usuń stary GPT/MBR
+    sgdisk --zap-all "${DISK}" 2>/dev/null || parted -s "${DISK}" mklabel gpt
+
+    if [[ "$BOOT_MODE" == "uefi" ]]; then
+        SWAP_END=$(( BOOT_MIB + SWAP_MIB ))
+        parted -s "${DISK}" \
+            mklabel gpt \
+            mkpart "EFI"  fat32      1MiB          "${BOOT_MIB}MiB" \
+            set 1 esp on \
+            mkpart "swap" linux-swap "${BOOT_MIB}MiB"  "${SWAP_END}MiB" \
+            mkpart "root" ext4       "${SWAP_END}MiB"  100%
+    else
+        BIOS_END=3
+        BOOT_END=$(( BIOS_END + BOOT_MIB ))
+        SWAP_END=$(( BOOT_END + SWAP_MIB ))
+        parted -s "${DISK}" \
+            mklabel gpt \
+            mkpart "BIOS" 1MiB "${BIOS_END}MiB" \
+            set 1 bios_grub on \
+            mkpart "boot" ext4       "${BIOS_END}MiB"  "${BOOT_END}MiB" \
+            mkpart "swap" linux-swap "${BOOT_END}MiB"  "${SWAP_END}MiB" \
+            mkpart "root" ext4       "${SWAP_END}MiB"  100%
+    fi
+
+    # Odśwież tablicę partycji
+    partprobe "${DISK}" 2>/dev/null || true
+    sleep 2
+
+    # ---------------------------------------------------------------------------
+    # Formatowanie
+    # ---------------------------------------------------------------------------
+    info "Formatowanie partycji…"
+
+    if [[ "$BOOT_MODE" == "uefi" ]]; then
+        mkfs.fat -F32 -n EFI "${EFI_PART}"
+    else
+        mkfs.ext4 -L boot -q "${BOOT_PART}"
+    fi
+
+    mkswap -L swap "${SWAP_PART}"
+    swapon "${SWAP_PART}"
+    mkfs.ext4 -L root -q "${ROOT_PART}"
+
+    # ---------------------------------------------------------------------------
+    # Montowanie
+    # ---------------------------------------------------------------------------
+    info "Montowanie systemu plików…"
+    mkdir -p "${MOUNTPOINT}"
+    mount "${ROOT_PART}" "${MOUNTPOINT}"
+
+    if [[ "$BOOT_MODE" == "uefi" ]]; then
+        mkdir -p "${MOUNTPOINT}/boot/efi"
+        mount "${EFI_PART}" "${MOUNTPOINT}/boot/efi"
+    else
+        mkdir -p "${MOUNTPOINT}/boot"
+        mount "${BOOT_PART}" "${MOUNTPOINT}/boot"
+    fi
+
+    # ---------------------------------------------------------------------------
+    # Pobieranie stage3
+    # ---------------------------------------------------------------------------
+    info "Pobieranie aktualnego stage3 (${STAGE3_VARIANT})…"
+    LATEST_FILE_URL="${GENTOO_MIRROR}/releases/${ARCH}/autobuilds/latest-${STAGE3_VARIANT}.txt"
+    # Plik latest-*.txt jest podpisany PGP – odfiltruj nagłówki PGP, komentarze i puste linie,
+    # a następnie wyciągnij pierwszą kolumnę z linii zawierającej ścieżkę do tarballa.
+    LATEST_PATH=$(wget -qO- "${LATEST_FILE_URL}" | grep '\.tar\.' | grep -v '^#' | awk '{print $1}' | head -1)
+    [[ -n "$LATEST_PATH" ]] || die "Nie udało się odczytać ścieżki stage3."
+
+    STAGE3_URL="${GENTOO_MIRROR}/releases/${ARCH}/autobuilds/${LATEST_PATH}"
+    STAGE3_FILE=$(basename "${LATEST_PATH}")
+
+    info "Pobieranie: ${STAGE3_URL}"
+    wget -q --show-progress -O "/tmp/${STAGE3_FILE}" "${STAGE3_URL}"
+    wget -q -O "/tmp/${STAGE3_FILE}.DIGESTS" "${STAGE3_URL}.DIGESTS" || \
+        wget -q -O "/tmp/${STAGE3_FILE}.sha256" "${STAGE3_URL}.sha256" || true
+
+    # Weryfikacja sumy kontrolnej (jeśli plik z sumami dostępny)
+    if [[ -f "/tmp/${STAGE3_FILE}.sha256" ]]; then
+        info "Weryfikacja sumy SHA256…"
+        (cd /tmp && sha256sum -c "${STAGE3_FILE}.sha256" 2>/dev/null) || \
+            warn "Nie można zweryfikować sumy – kontynuję."
+    fi
+
+    # ---------------------------------------------------------------------------
+    # Rozpakowywanie stage3
+    # ---------------------------------------------------------------------------
+    info "Rozpakowywanie stage3 do ${MOUNTPOINT}…"
+    tar xpf "/tmp/${STAGE3_FILE}" \
+        --xattrs-include='*.*' \
+        --numeric-owner \
+        -C "${MOUNTPOINT}"
+    success "Stage3 rozpakowany."
+
 else
-    mkfs.ext4 -L boot -q "${BOOT_PART}"
+    # ---------------------------------------------------------------------------
+    # Tryb --skip-disk: montowanie istniejących partycji (wznawianie instalacji)
+    # ---------------------------------------------------------------------------
+    info "Tryb --skip-disk: pomijanie partycjonowania i rozpakowywania stage3."
+    info "Montowanie istniejących partycji → ${MOUNTPOINT}…"
+    swapon "${SWAP_PART}" 2>/dev/null || true
+    mkdir -p "${MOUNTPOINT}"
+    mount "${ROOT_PART}" "${MOUNTPOINT}" 2>/dev/null || \
+        warn "${ROOT_PART} jest już zamontowana lub montowanie nie powiodło się."
+    if [[ "$BOOT_MODE" == "uefi" ]]; then
+        mkdir -p "${MOUNTPOINT}/boot/efi"
+        mount "${EFI_PART}" "${MOUNTPOINT}/boot/efi" 2>/dev/null || true
+    else
+        mkdir -p "${MOUNTPOINT}/boot"
+        mount "${BOOT_PART}" "${MOUNTPOINT}/boot" 2>/dev/null || true
+    fi
 fi
-
-mkswap -L swap "${SWAP_PART}"
-swapon "${SWAP_PART}"
-mkfs.ext4 -L root -q "${ROOT_PART}"
-
-# ---------------------------------------------------------------------------
-# Montowanie
-# ---------------------------------------------------------------------------
-info "Montowanie systemu plików…"
-mkdir -p "${MOUNTPOINT}"
-mount "${ROOT_PART}" "${MOUNTPOINT}"
-
-if [[ "$BOOT_MODE" == "uefi" ]]; then
-    mkdir -p "${MOUNTPOINT}/boot/efi"
-    mount "${EFI_PART}" "${MOUNTPOINT}/boot/efi"
-else
-    mkdir -p "${MOUNTPOINT}/boot"
-    mount "${BOOT_PART}" "${MOUNTPOINT}/boot"
-fi
-
-# ---------------------------------------------------------------------------
-# Pobieranie stage3
-# ---------------------------------------------------------------------------
-info "Pobieranie aktualnego stage3 (${STAGE3_VARIANT})…"
-LATEST_FILE_URL="${GENTOO_MIRROR}/releases/${ARCH}/autobuilds/latest-${STAGE3_VARIANT}.txt"
-# Plik latest-*.txt jest podpisany PGP – odfiltruj nagłówki PGP, komentarze i puste linie,
-# a następnie wyciągnij pierwszą kolumnę z linii zawierającej ścieżkę do tarballa.
-LATEST_PATH=$(wget -qO- "${LATEST_FILE_URL}" | grep '\.tar\.' | grep -v '^#' | awk '{print $1}' | head -1)
-[[ -n "$LATEST_PATH" ]] || die "Nie udało się odczytać ścieżki stage3."
-
-STAGE3_URL="${GENTOO_MIRROR}/releases/${ARCH}/autobuilds/${LATEST_PATH}"
-STAGE3_FILE=$(basename "${LATEST_PATH}")
-
-info "Pobieranie: ${STAGE3_URL}"
-wget -q --show-progress -O "/tmp/${STAGE3_FILE}" "${STAGE3_URL}"
-wget -q -O "/tmp/${STAGE3_FILE}.DIGESTS" "${STAGE3_URL}.DIGESTS" || \
-    wget -q -O "/tmp/${STAGE3_FILE}.sha256" "${STAGE3_URL}.sha256" || true
-
-# Weryfikacja sumy kontrolnej (jeśli plik z sumami dostępny)
-if [[ -f "/tmp/${STAGE3_FILE}.sha256" ]]; then
-    info "Weryfikacja sumy SHA256…"
-    (cd /tmp && sha256sum -c "${STAGE3_FILE}.sha256" 2>/dev/null) || \
-        warn "Nie można zweryfikować sumy – kontynuję."
-fi
-
-# ---------------------------------------------------------------------------
-# Rozpakowywanie stage3
-# ---------------------------------------------------------------------------
-info "Rozpakowywanie stage3 do ${MOUNTPOINT}…"
-tar xpf "/tmp/${STAGE3_FILE}" \
-    --xattrs-include='*.*' \
-    --numeric-owner \
-    -C "${MOUNTPOINT}"
-success "Stage3 rozpakowany."
 
 # ---------------------------------------------------------------------------
 # Kopiowanie resolv.conf (DNS)
@@ -376,6 +416,8 @@ set -u
 # Przerwanie zależności cyklicznej libwebp <-> tiff (webp USE flag)
 mkdir -p /etc/portage/package.use
 echo "media-libs/tiff -webp" >> /etc/portage/package.use/fix-circular
+# Przerwanie zależności cyklicznej pillow -> harfbuzz -> glib -> docutils -> pillow (truetype USE flag)
+echo "dev-python/pillow -truetype" >> /etc/portage/package.use/fix-circular
 info "Aktualizacja systemu bazowego…"
 emerge -uDN --with-bdeps=y --quiet-build @world
 
@@ -555,7 +597,7 @@ chroot "${MOUNTPOINT}" /bin/bash /tmp/chroot_phase2.sh
 # ---------------------------------------------------------------------------
 info "Odmontowywanie i sprzątanie…"
 rm -f "${MOUNTPOINT}/tmp/chroot_phase1.sh" "${MOUNTPOINT}/tmp/chroot_phase2.sh"
-rm -f "/tmp/${STAGE3_FILE}" 2>/dev/null || true
+rm -f "/tmp/${STAGE3_FILE:-}" 2>/dev/null || true
 
 umount -R "${MOUNTPOINT}/dev"  2>/dev/null || true
 umount -R "${MOUNTPOINT}/sys"  2>/dev/null || true
