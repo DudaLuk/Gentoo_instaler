@@ -321,8 +321,10 @@ set -euo pipefail
 info()    { echo -e "\e[0;36m[CHROOT1]\e[0m $*"; }
 die()     { echo -e "\e[0;31m[ERROR]\e[0m $*" >&2; exit 1; }
 
-# Wczytaj profil powłoki
+# Wczytaj profil powłoki (set +u aby skrypty w /etc/profile.d nie przerywały działania)
+set +u
 source /etc/profile
+set -u
 export PS1="(chroot) ${PS1}"
 
 # ---------------------------------------------------------------------------
@@ -363,7 +365,10 @@ locale-gen
 eselect locale set pl_PL.UTF-8
 
 # Wczytaj środowisko locale
-env-update && source /etc/profile
+env-update
+set +u
+source /etc/profile
+set -u
 
 # ---------------------------------------------------------------------------
 # Aktualizacja systemu (world)
@@ -406,7 +411,9 @@ set -euo pipefail
 info()    { echo -e "\e[0;36m[CHROOT2]\e[0m \$*"; }
 die()     { echo -e "\e[0;31m[ERROR]\e[0m \$*" >&2; exit 1; }
 
+set +u
 source /etc/profile
+set -u
 export PS1="(chroot) \${PS1}"
 
 BOOT_MODE="${BOOT_MODE}"
