@@ -427,6 +427,8 @@ emerge -uDN --with-bdeps=y --quiet-build @world
 info "Instalacja jądra (gentoo-kernel-bin)…"
 mkdir -p /etc/portage/package.accept_keywords
 echo "sys-kernel/gentoo-kernel-bin ~amd64" >> /etc/portage/package.accept_keywords/kernel
+# installkernel requires dracut USE flag when gentoo-kernel-bin uses initramfs
+echo "sys-kernel/installkernel dracut" >> /etc/portage/package.use/fix-circular
 emerge --quiet-build sys-kernel/gentoo-kernel-bin sys-kernel/linux-firmware
 
 # ---------------------------------------------------------------------------
