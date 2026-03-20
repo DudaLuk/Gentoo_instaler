@@ -425,7 +425,8 @@ emerge -uDN --with-bdeps=y --quiet-build @world
 # Jądro systemu (binarne – szybka instalacja)
 # ---------------------------------------------------------------------------
 info "Instalacja jądra (gentoo-kernel-bin)…"
-echo "sys-kernel/gentoo-kernel-bin ~amd64" >> /etc/portage/package.accept_keywords
+mkdir -p /etc/portage/package.accept_keywords
+echo "sys-kernel/gentoo-kernel-bin ~amd64" >> /etc/portage/package.accept_keywords/kernel
 emerge --quiet-build sys-kernel/gentoo-kernel-bin sys-kernel/linux-firmware
 
 # ---------------------------------------------------------------------------
@@ -473,7 +474,8 @@ HOSTNAME_VAL="${HOSTNAME}"
 # ---------------------------------------------------------------------------
 info "Instalacja GRUB…"
 if [[ "\$BOOT_MODE" == "uefi" ]]; then
-    echo "sys-boot/grub:2 ~amd64" >> /etc/portage/package.accept_keywords 2>/dev/null || true
+    mkdir -p /etc/portage/package.accept_keywords
+    echo "sys-boot/grub:2 ~amd64" >> /etc/portage/package.accept_keywords/grub
     emerge --quiet-build sys-boot/grub:2 sys-boot/efibootmgr
     grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=Gentoo
 else
